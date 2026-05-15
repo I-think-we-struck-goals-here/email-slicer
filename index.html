@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Email Slicer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #f1f5f9;
+      --surface: #ffffff;
+      --border: #e2e8f0;
+      --text: #1e293b;
+      --muted: #64748b;
+      --red: #ef4444;
+      --red-dim: rgba(239,68,68,0.15);
+      --blue: #3b82f6;
+      --blue-hover: #2563eb;
+      --green: #10b981;
+      --radius: 12px;
+      --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.05);
+      --shadow-md: 0 4px 12px rgba(0,0,0,.1);
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .header-icon { font-size: 2rem; line-height: 1; }
+    .header h1 { font-size: 1.375rem; font-weight: 700; }
+    .header p  { color: var(--muted); font-size: 0.8125rem; margin-top: 1px; }
+
+    /* ── Upload zone ── */
+    .upload-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 72px 32px;
+      text-align: center;
+      cursor: pointer;
+      background: var(--surface);
+      transition: border-color .15s, background .15s;
+    }
+    .upload-zone:hover,
+    .upload-zone.drag-over {
+      border-color: var(--blue);
+      background: #eff6ff;
+    }
+    .upload-zone .icon { font-size: 2.75rem; margin-bottom: 14px; }
+    .upload-zone h2   { font-size: 1.125rem; font-weight: 600; margin-bottom: 6px; }
+    .upload-zone p    { color: var(--muted); font-size: 0.875rem; }
+
+    /* ── Editor ── */
+    .editor { display: none; flex-direction: column; gap: 16px; }
+    .editor.visible { display: flex; }
+
+    /* ── Toolbar ── */
+    .toolbar {
+      position: sticky;
+      top: 12px;
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      box-shadow: var(--shadow-md);
+    }
+    .toolbar .info {
+      font-size: 0.875rem;
+      color: var(--muted);
+      margin-right: auto;
+    }
+    .toolbar .info strong { color: var(--text); }
+
+    btn, button {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    button {
+      padding: 7px 14px;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background .12s, opacity .12s;
+      white-space: nowrap;
+      line-height: 1.4;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-ghost   { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    .btn-ghost:hover { background: var(--bg); color: var(--text); }
+    .btn-blue    { background: var(--blue); color: #fff; }
+    .btn-blue:hover:not(:disabled) { background: var(--blue-hover); }
+    .btn-green   { background: var(--green); color: #fff; }
+    .btn-link    { background: none; border: none; color: var(--blue); padding: 0; font-size: 0.8125rem; text-decoration: underline; }
+    .btn-link:hover { color: var(--blue-hover); }
+
+    .spinner {
+      width: 14px; height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .exporting { display: none; align-items: center; gap: 6px; font-size: 0.8125rem; color: var(--muted); }
+    .exporting.visible { display: flex; }
+
+    /* ── Image scroll area ── */
+    .image-scroll {
+      max-height: 76vh;
+      overflow-y: auto;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-md);
+      background: #18181b;
+      scrollbar-width: thin;
+      scrollbar-color: #444 transparent;
+    }
+
+    .image-wrapper {
+      position: relative;
+      display: block;
+      width: 100%;
+      user-select: none;
+      cursor: crosshair; /* click to add a slice */
+    }
+
+    .image-wrapper img {
+      display: block;
+      width: 100%;
+      height: auto;
+      pointer-events: none;
+    }
+
+    /* ── Slice lines ── */
+    .slice-line {
+      position: absolute;
+      left: 0;
+      right: 0;
+      z-index: 20;
+      transform: translateY(-50%);
+      cursor: ns-resize;
+      touch-action: none;
+    }
+    /* Big invisible hit zone above/below */
+    .slice-line::before {
+      content: '';
+      position: absolute;
+      inset: -14px 0;
+    }
+
+    .line-bar {
+      height: 3px;
+      background: var(--red);
+      box-shadow: 0 0 0 1px rgba(239,68,68,.25), 0 2px 8px rgba(239,68,68,.35);
+      position: relative;
+      transition: height .1s, box-shadow .1s;
+    }
+    .slice-line:hover .line-bar,
+    .slice-line.dragging .line-bar {
+      height: 5px;
+      box-shadow: 0 0 0 2px rgba(239,68,68,.4), 0 3px 12px rgba(239,68,68,.5);
+    }
+
+    .line-badge {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      background: var(--red);
+      color: #fff;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      padding: 3px 10px 3px 8px;
+      border-radius: 99px;
+      white-space: nowrap;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      box-shadow: var(--shadow-md);
+      letter-spacing: 0.01em;
+    }
+    .grip {
+      display: flex;
+      flex-direction: column;
+      gap: 2.5px;
+      opacity: .75;
+    }
+    .grip span {
+      display: flex;
+      gap: 2.5px;
+    }
+    .grip span::before,
+    .grip span::after {
+      content: '';
+      width: 2.5px;
+      height: 2.5px;
+      border-radius: 50%;
+      background: #fff;
+    }
+
+    .del-btn {
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 19px;
+      height: 19px;
+      border-radius: 50%;
+      background: var(--red);
+      color: #fff;
+      border: 2px solid #fff;
+      font-size: 11px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      line-height: 1;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transition: opacity .15s;
+      z-index: 30;
+    }
+    .slice-line:hover .del-btn { opacity: 1; }
+
+    /* ── Hint strip ── */
+    .hint {
+      text-align: center;
+      font-size: 0.75rem;
+      color: #6b7280;
+      padding-bottom: 2px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-icon">✂️</div>
+  <div>
+    <h1>Email Slicer</h1>
+    <p>Chop Canva email exports into ready-to-send slices</p>
+  </div>
+</div>
+
+<!-- Upload -->
+<div class="upload-zone" id="uploadZone">
+  <div class="icon">🖼️</div>
+  <h2>Drop your image here</h2>
+  <p>or click to upload &nbsp;·&nbsp; PNG, JPG, WebP</p>
+  <input type="file" id="fileInput" accept="image/*" style="display:none">
+</div>
+
+<!-- Editor -->
+<div class="editor" id="editor">
+
+  <div class="toolbar">
+    <span class="info" id="sliceInfo">—</span>
+    <button class="btn-ghost" id="autoBtn">🔍 Auto-detect</button>
+    <button class="btn-ghost" id="addBtn">＋ Add slice</button>
+    <button class="btn-ghost" id="clearBtn">✕ Clear all</button>
+    <div class="exporting" id="exportingEl"><div class="spinner"></div> Exporting…</div>
+    <button class="btn-blue" id="exportBtn">⬇ Export ZIP</button>
+    <button class="btn-link" id="swapBtn">swap image</button>
+  </div>
+
+  <p class="hint">Click the image to add a slice · drag lines to reposition</p>
+
+  <div class="image-scroll" id="imageScroll">
+    <div class="image-wrapper" id="imageWrapper">
+      <img id="preview" src="" alt="preview">
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.5.0/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+<script>
+  // ── State ────────────────────────────────────────────────────────────────
+  let imageEl = null;          // full-res Image object
+  let sliceLines = [];         // Y positions in natural-image pixels, mutable during drag
+  let dragState = null;        // active drag context
+
+  // ── Elements ─────────────────────────────────────────────────────────────
+  const uploadZone   = document.getElementById('uploadZone');
+  const fileInput    = document.getElementById('fileInput');
+  const editor       = document.getElementById('editor');
+  const imageWrapper = document.getElementById('imageWrapper');
+  const preview      = document.getElementById('preview');
+  const imageScroll  = document.getElementById('imageScroll');
+  const sliceInfo    = document.getElementById('sliceInfo');
+  const exportingEl  = document.getElementById('exportingEl');
+  const exportBtn    = document.getElementById('exportBtn');
+
+  // ── Upload ────────────────────────────────────────────────────────────────
+  uploadZone.addEventListener('click', () => fileInput.click());
+
+  uploadZone.addEventListener('dragover', e => {
+    e.preventDefault();
+    uploadZone.classList.add('drag-over');
+  });
+  uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+  uploadZone.addEventListener('drop', e => {
+    e.preventDefault();
+    uploadZone.classList.remove('drag-over');
+    const f = e.dataTransfer.files[0];
+    if (f && f.type.startsWith('image/')) loadFile(f);
+  });
+
+  fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+
+  document.getElementById('swapBtn').addEventListener('click', () => fileInput.click());
+
+  function loadFile(file) {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      imageEl = img;
+      preview.src = url;
+      uploadZone.style.display = 'none';
+      editor.classList.add('visible');
+      // default: two evenly-spaced lines (3 pieces)
+      sliceLines = [
+        Math.round(img.naturalHeight / 3),
+        Math.round(img.naturalHeight * 2 / 3),
+      ];
+      renderLines();
+      updateInfo();
+    };
+    img.src = url;
+  }
+
+  // ── Render lines ──────────────────────────────────────────────────────────
+  function renderLines() {
+    imageWrapper.querySelectorAll('.slice-line').forEach(el => el.remove());
+    sliceLines.sort((a, b) => a - b);
+
+    sliceLines.forEach((y, i) => {
+      const div = document.createElement('div');
+      div.className = 'slice-line';
+      div.dataset.index = i;
+      div.style.top = pct(y) + '%';
+
+      div.innerHTML = `
+        <div class="line-bar">
+          <div class="line-badge">
+            <div class="grip"><span></span><span></span></div>
+            slice ${i + 1}
+          </div>
+          <button class="del-btn" data-index="${i}" title="Remove this line">×</button>
+        </div>`;
+
+      div.addEventListener('pointerdown', startDrag);
+      div.querySelector('.del-btn').addEventListener('click', e => {
+        e.stopPropagation();
+        sliceLines.splice(+e.currentTarget.dataset.index, 1);
+        renderLines();
+        updateInfo();
+      });
+
+      imageWrapper.appendChild(div);
+    });
+  }
+
+  function pct(y) {
+    return (y / imageEl.naturalHeight * 100).toFixed(4);
+  }
+
+  function updateInfo() {
+    const n = sliceLines.length;
+    sliceInfo.innerHTML = `<strong>${n}</strong> slice${n !== 1 ? 's' : ''} → <strong>${n + 1}</strong> piece${n + 1 !== 1 ? 's' : ''}`;
+  }
+
+  // ── Click on image to add a slice ─────────────────────────────────────────
+  imageWrapper.addEventListener('click', e => {
+    // Don't add if clicking on a line or during drag
+    if (dragState) return;
+    if (e.target.closest('.slice-line')) return;
+
+    const rect = imageWrapper.getBoundingClientRect();
+    const yPx  = e.clientY - rect.top + imageScroll.scrollTop;
+    const yNat = Math.round(yPx / imageWrapper.offsetHeight * imageEl.naturalHeight);
+    const clamped = Math.max(1, Math.min(imageEl.naturalHeight - 1, yNat));
+    sliceLines.push(clamped);
+    renderLines();
+    updateInfo();
+  });
+
+  // ── Drag ─────────────────────────────────────────────────────────────────
+  function startDrag(e) {
+    if (e.target.closest('.del-btn')) return;
+    e.preventDefault();
+    e.stopPropagation(); // don't trigger image click
+
+    const idx = +e.currentTarget.dataset.index;
+    dragState = {
+      idx,
+      startY: e.clientY,
+      origLineY: sliceLines[idx],
+      displayedH: imageWrapper.offsetHeight,
+    };
+
+    e.currentTarget.classList.add('dragging');
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.currentTarget.addEventListener('pointermove', onDrag);
+    e.currentTarget.addEventListener('pointerup', endDrag);
+  }
+
+  function onDrag(e) {
+    if (!dragState) return;
+    const { idx, startY, origLineY, displayedH } = dragState;
+    const delta  = e.clientY - startY;
+    const deltaY = delta / displayedH * imageEl.naturalHeight;
+    let newY = Math.round(origLineY + deltaY);
+    newY = Math.max(1, Math.min(imageEl.naturalHeight - 1, newY));
+    sliceLines[idx] = newY;
+
+    // Move only this DOM element for smooth performance
+    const divs = imageWrapper.querySelectorAll('.slice-line');
+    if (divs[idx]) divs[idx].style.top = pct(newY) + '%';
+  }
+
+  function endDrag(e) {
+    if (!dragState) return;
+    e.currentTarget.classList.remove('dragging');
+    e.currentTarget.removeEventListener('pointermove', onDrag);
+    e.currentTarget.removeEventListener('pointerup', endDrag);
+    dragState = null;
+    renderLines();  // re-sort & relabel if lines crossed
+    updateInfo();
+  }
+
+  // ── Add at largest gap ────────────────────────────────────────────────────
+  document.getElementById('addBtn').addEventListener('click', () => {
+    if (!imageEl) return;
+    const bounds = [0, ...sliceLines.sort((a, b) => a - b), imageEl.naturalHeight];
+    let maxGap = 0, maxI = 1;
+    for (let i = 1; i < bounds.length; i++) {
+      const gap = bounds[i] - bounds[i - 1];
+      if (gap > maxGap) { maxGap = gap; maxI = i; }
+    }
+    sliceLines.push(Math.round((bounds[maxI - 1] + bounds[maxI]) / 2));
+    renderLines();
+    updateInfo();
+  });
+
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    sliceLines = [];
+    renderLines();
+    updateInfo();
+  });
+
+  // ── Auto-detect whitespace ─────────────────────────────────────────────────
+  document.getElementById('autoBtn').addEventListener('click', () => {
+    if (!imageEl) return;
+    const points = detectWhitespace(imageEl);
+    if (!points.length) {
+      alert('No clear white-space gaps found. Try adding slices manually or adjust your image.');
+      return;
+    }
+    sliceLines = points;
+    renderLines();
+    updateInfo();
+  });
+
+  function detectWhitespace(img) {
+    const scale = Math.min(1, 800 / img.naturalWidth);
+    const w = Math.round(img.naturalWidth  * scale);
+    const h = Math.round(img.naturalHeight * scale);
+    const cvs = document.createElement('canvas');
+    cvs.width = w; cvs.height = h;
+    const ctx = cvs.getContext('2d');
+    ctx.drawImage(img, 0, 0, w, h);
+    const { data } = ctx.getImageData(0, 0, w, h);
+
+    const LIGHT = 238;
+    const MIN_RUN = Math.max(2, Math.round(h * 0.015));
+
+    // Average brightness per row
+    const lightRow = new Uint8Array(h);
+    for (let y = 0; y < h; y++) {
+      let sum = 0;
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        sum += (data[i] + data[i+1] + data[i+2]) / 3;
+      }
+      lightRow[y] = sum / w > LIGHT ? 1 : 0;
+    }
+
+    // Find runs of light rows, ignore outer 3%
+    const margin = Math.round(h * 0.03);
+    const points = [];
+    let runStart = -1;
+    for (let y = margin; y < h - margin + 1; y++) {
+      if (lightRow[y] && runStart < 0) runStart = y;
+      if ((!lightRow[y] || y === h - margin) && runStart >= 0) {
+        const len = y - runStart;
+        if (len >= MIN_RUN) {
+          const midScaled = (runStart + y) / 2;
+          points.push(Math.round(midScaled / scale));
+        }
+        runStart = -1;
+      }
+    }
+    return points;
+  }
+
+  // ── Export ────────────────────────────────────────────────────────────────
+  exportBtn.addEventListener('click', async () => {
+    if (!imageEl) return;
+
+    exportBtn.disabled = true;
+    exportingEl.classList.add('visible');
+
+    try {
+      const sorted    = [0, ...sliceLines.sort((a, b) => a - b), imageEl.naturalHeight];
+      const zip       = new JSZip();
+      const folder    = zip.folder('email-slices');
+      const promises  = [];
+
+      for (let i = 0; i < sorted.length - 1; i++) {
+        const startY  = sorted[i];
+        const sliceH  = sorted[i + 1] - startY;
+        const cvs     = document.createElement('canvas');
+        cvs.width     = imageEl.naturalWidth;
+        cvs.height    = sliceH;
+        cvs.getContext('2d').drawImage(
+          imageEl, 0, startY, imageEl.naturalWidth, sliceH,
+          0, 0, imageEl.naturalWidth, sliceH
+        );
+
+        const num = String(i + 1).padStart(2, '0');
+        promises.push(new Promise(async resolve => {
+          cvs.toBlob(async blob => {
+            let fname = `slice-${num}.png`;
+            if (blob.size > 400 * 1024) {
+              blob  = await compressToJpeg(cvs, blob);
+              fname = `slice-${num}.jpg`;
+            }
+            folder.file(fname, blob);
+            resolve();
+          }, 'image/png');
+        }));
+      }
+
+      await Promise.all(promises);
+      const content = await zip.generateAsync({ type: 'blob' });
+      saveAs(content, 'email-slices.zip');
+    } finally {
+      exportBtn.disabled = false;
+      exportingEl.classList.remove('visible');
+    }
+  });
+
+  async function compressToJpeg(cvs, fallback) {
+    let quality = 0.92;
+    let blob = fallback;
+    while (blob.size > 400 * 1024 && quality >= 0.68) {
+      blob = await new Promise(res => cvs.toBlob(res, 'image/jpeg', quality));
+      quality -= 0.04;
+    }
+    return blob;
+  }
+</script>
+</body>
+</html>
