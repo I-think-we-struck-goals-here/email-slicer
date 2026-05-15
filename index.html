@@ -186,6 +186,84 @@
       color: var(--muted);
     }
 
+    /* ── Sensitivity slider (shown after auto-detect runs) ── */
+    .auto-group { display: flex; align-items: center; gap: 4px; }
+
+    .sensitivity-pill {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 3px 8px 3px 4px;
+      height: 32px;
+    }
+    .sensitivity-pill.visible { display: flex; }
+
+    .btn-icon {
+      padding: 0 6px;
+      font-size: 12px;
+      min-width: 26px;
+      height: 24px;
+      border-radius: 5px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      color: var(--muted);
+      transition: background .12s, color .12s;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn-icon:hover { background: var(--border); color: var(--text); }
+
+    .sens-label {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+      user-select: none;
+    }
+
+    .sens-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 72px;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--border);
+      outline: none;
+      cursor: pointer;
+      accent-color: var(--blue);
+    }
+    .sens-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: var(--blue);
+      cursor: pointer;
+      box-shadow: 0 1px 3px rgba(0,0,0,.15);
+      transition: transform .1s;
+    }
+    .sens-slider::-webkit-slider-thumb:hover { transform: scale(1.2); }
+    .sens-slider::-moz-range-thumb {
+      width: 14px; height: 14px;
+      border-radius: 50%; border: none;
+      background: var(--blue); cursor: pointer;
+    }
+
+    .sens-count {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--blue);
+      background: #eff6ff;
+      border-radius: 4px;
+      padding: 1px 5px;
+      white-space: nowrap;
+      min-width: 36px;
+      text-align: center;
+    }
+
     /* ── Image scroll area ── */
     .image-scroll {
       max-height: 76vh;
@@ -318,7 +396,18 @@
 
     <div class="toolbar">
       <span class="info" id="sliceInfo">—</span>
-      <button class="btn-ghost" id="autoBtn">🔍 Auto-detect</button>
+
+      <div class="auto-group">
+        <button class="btn-ghost" id="autoBtn">🔍 Auto-detect</button>
+        <div class="sensitivity-pill" id="sensPill">
+          <button class="btn-icon" id="autoResetBtn" title="Re-run auto-detect">🔍</button>
+          <span class="sens-label">Fewer</span>
+          <input type="range" class="sens-slider" id="sensSlider" min="1" max="5" value="3" step="1">
+          <span class="sens-label">More</span>
+          <span class="sens-count" id="sensCount">—</span>
+        </div>
+      </div>
+
       <button class="btn-ghost" id="addBtn">＋ Add slice</button>
       <button class="btn-ghost" id="clearBtn">✕ Clear all</button>
       <div class="toolbar-sep"></div>
@@ -383,6 +472,7 @@
       preview.src = url;
       uploadZone.style.display = 'none';
       editor.classList.add('visible');
+      resetAutoDetectUI();
       sliceLines = [
         Math.round(img.naturalHeight / 3),
         Math.round(img.naturalHeight * 2 / 3),
@@ -509,30 +599,57 @@
     sliceLines = []; renderLines(); updateInfo();
   });
 
-  // ── Auto-detect cut points ────────────────────────────────────────────────
+  // ── Auto-detect: slider UI ────────────────────────────────────────────────
+  const sensPill   = document.getElementById('sensPill');
+  const sensSlider = document.getElementById('sensSlider');
+  const sensCount  = document.getElementById('sensCount');
+
+  function runAutoDetect(level) {
+    const cuts = detectCutPoints(imageEl, level);
+    sliceLines = cuts;
+    renderLines(); updateInfo();
+    const n = cuts.length;
+    sensCount.textContent = n === 0 ? 'none' : `${n} cut${n !== 1 ? 's' : ''}`;
+    if (n === 0) alert('No clear section boundaries found. Try dragging the slider toward More, or add slices manually.');
+  }
+
   document.getElementById('autoBtn').addEventListener('click', () => {
     if (!imageEl) return;
-    const points = detectCutPoints(imageEl);
-    if (!points.length) {
-      alert('No clear section boundaries found. Try adding slices manually.');
-      return;
-    }
-    sliceLines = points; renderLines(); updateInfo();
+    document.getElementById('autoBtn').style.display = 'none';
+    sensPill.classList.add('visible');
+    sensSlider.value = 3;
+    runAutoDetect(3);
   });
 
-  // Detect boundaries between visual zones: photo/graphic ↔ text background ↔ whitespace.
-  // Also finds trailing whitespace so you can cut it off the bottom.
-  function detectCutPoints(img) {
+  document.getElementById('autoResetBtn').addEventListener('click', () => {
+    sensSlider.value = 3;
+    runAutoDetect(3);
+  });
+
+  sensSlider.addEventListener('input', () => runAutoDetect(+sensSlider.value));
+
+  function resetAutoDetectUI() {
+    document.getElementById('autoBtn').style.display = '';
+    sensPill.classList.remove('visible');
+    sensCount.textContent = '—';
+  }
+
+  // ── Core detection algorithm ───────────────────────────────────────────────
+  // Classifies every row as COMPLEX (photo/graphic) or FLAT (uniform bg),
+  // merges aggressively into large zones, then cuts only at COMPLEX↔FLAT
+  // boundaries. Sensitivity 1–5 controls minimum zone size (fewer↔more cuts).
+  function detectCutPoints(img, sensitivity = 3) {
     const scale = Math.min(1, 800 / img.naturalWidth);
     const w = Math.round(img.naturalWidth * scale);
     const h = Math.round(img.naturalHeight * scale);
+
     const cvs = document.createElement('canvas');
     cvs.width = w; cvs.height = h;
     const ctx = cvs.getContext('2d');
     ctx.drawImage(img, 0, 0, w, h);
     const { data } = ctx.getImageData(0, 0, w, h);
 
-    // Per-row mean brightness and standard deviation
+    // Step 1: per-row brightness mean + stddev
     const bright = new Float32Array(h);
     const stddev = new Float32Array(h);
     for (let y = 0; y < h; y++) {
@@ -552,85 +669,94 @@
       stddev[y] = Math.sqrt(sq / w);
     }
 
-    // Smooth both signals to eliminate single-row noise
-    const sb = rowSmooth(bright, 7);
-    const ss = rowSmooth(stddev, 7);
+    // Step 2: heavy smoothing — 3% of height erases heading/body variation
+    const win = Math.max(15, Math.round(h * 0.03));
+    const sb = rowSmooth(bright, win);
+    const ss = rowSmooth(stddev, win);
 
-    // Adaptive thresholds — based on this image's own stddev range
-    const maxStd       = Math.max(...ss);
-    const IMAGE_STD    = Math.max(12, maxStd * 0.30); // clearly photo/graphic
-    const UNIFORM_STD  = Math.max(4,  maxStd * 0.10); // clearly flat/uniform
-    const WHITE_BRIGHT = 232;
+    // Step 3: percentile-based thresholds — adapts to each image's contrast
+    const sorted = Float32Array.from(ss).sort();
+    const STD_HIGH = sorted[Math.floor(h * 0.40)]; // 40th pct → COMPLEX
+    const STD_LOW  = sorted[Math.floor(h * 0.15)]; // 15th pct → FLAT
 
-    // Classify each row:  1=photo/graphic  2=text/content  3=white/near-white
+    // Classify: 1=COMPLEX  2=FLAT  0=AMBIGUOUS
     const cls = new Uint8Array(h);
     for (let y = 0; y < h; y++) {
-      if (sb[y] > WHITE_BRIGHT && ss[y] < UNIFORM_STD) cls[y] = 3;
-      else if (ss[y] > IMAGE_STD)                       cls[y] = 1;
-      else                                               cls[y] = 2;
+      if      (ss[y] >= STD_HIGH) cls[y] = 1;
+      else if (ss[y] <= STD_LOW)  cls[y] = 2;
+      // else 0 = ambiguous
     }
 
-    // Build zones: consecutive runs of the same class
+    // Step 4: resolve ambiguous rows via forward then backward propagation
+    let last = 1;
+    for (let y = 0; y < h; y++) { if (cls[y]) last = cls[y]; else if (last === 1) cls[y] = 1; }
+    last = 2;
+    for (let y = h - 1; y >= 0; y--) { if (cls[y]) last = cls[y]; else cls[y] = last; }
+
+    // Step 5: build zones from consecutive same-class rows
     const zones = [];
     let zs = 0;
     for (let y = 1; y <= h; y++) {
-      if (y === h || cls[y] !== cls[zs]) {
-        zones.push({ t: cls[zs], s: zs, e: y });
-        zs = y;
-      }
+      if (y === h || cls[y] !== cls[zs]) { zones.push({ t: cls[zs], s: zs, e: y }); zs = y; }
     }
 
-    // Merge tiny zones (< 1.5% of height) into their neighbour — removes noise
-    const MIN_ZONE = Math.max(4, Math.round(h * 0.015));
-    for (let pass = 0; pass < 3; pass++) {
+    // Sensitivity → minimum zone fraction
+    const minFrac = [0, 0.12, 0.09, 0.07, 0.045, 0.025][sensitivity] || 0.07;
+    const MIN_ZONE = Math.max(6, Math.round(h * minFrac));
+
+    // Merge zones smaller than MIN_ZONE into their larger neighbour, repeatedly
+    let changed = true;
+    while (changed) {
+      changed = false;
       for (let i = 0; i < zones.length; i++) {
-        const z = zones[i];
-        if (z.e - z.s < MIN_ZONE) {
+        if (zones[i].e - zones[i].s < MIN_ZONE) {
           const prev = zones[i - 1], next = zones[i + 1];
-          const absorber = prev && (!next || (z.s - prev.s < next.e - z.e)) ? prev : next;
-          if (absorber) { absorber.s = Math.min(absorber.s, z.s); absorber.e = Math.max(absorber.e, z.e); zones.splice(i--, 1); }
+          const ps = prev ? prev.e - prev.s : 0;
+          const ns = next ? next.e - next.s : 0;
+          const target = ps >= ns ? prev : next;
+          if (target) {
+            target.s = Math.min(target.s, zones[i].s);
+            target.e = Math.max(target.e, zones[i].e);
+            zones.splice(i--, 1);
+            changed = true;
+          }
         }
       }
     }
 
-    const margin  = Math.round(h * 0.025);
-    const minDist = Math.round(img.naturalHeight * 0.025);
-    const cuts    = [];
+    // Step 6: merge adjacent same-type zones left over after absorption
+    for (let i = zones.length - 2; i >= 0; i--) {
+      if (zones[i].t === zones[i+1].t) { zones[i].e = zones[i+1].e; zones.splice(i+1, 1); }
+    }
 
+    // Step 7: trailing whitespace — separate detector, independent of zone size
+    const WHITE_BRIGHT = 238;
+    let lastContent = h;
+    for (let y = h - 1; y >= 0; y--) {
+      if (sb[y] <= WHITE_BRIGHT || ss[y] > STD_LOW) { lastContent = y + 1; break; }
+    }
+    const trailMin = Math.round(h * 0.03);
+    const fringe   = Math.round(h * 0.05);
+    const hasTrail = lastContent < h - trailMin && lastContent > fringe;
+
+    // Step 8: emit cuts at COMPLEX↔FLAT transitions within the image body
+    const cuts = [];
     for (let i = 0; i + 1 < zones.length; i++) {
       const curr = zones[i], next = zones[i + 1];
       if (curr.t === next.t) continue;
-
-      // Boundary row in scaled pixels
       const boundary = curr.e;
-      if (boundary < margin || boundary > h - margin) continue;
-
-      let cutY;
-      if (curr.t === 3) {
-        // Current zone is white — cut in its middle so the white is split between slices
-        cutY = Math.round((curr.s + curr.e) / 2 / scale);
-      } else if (next.t === 3) {
-        // Next zone is white — cut at the start of it (end of content)
-        cutY = Math.round(boundary / scale);
-      } else {
-        // Direct photo↔text transition — cut right at the boundary
-        cutY = Math.round(boundary / scale);
-      }
-      cuts.push(cutY);
+      if (boundary < fringe || boundary > h - fringe) continue;
+      cuts.push(Math.round(boundary / scale));
     }
 
-    // Trailing whitespace: find last non-white row and add a cut there
-    let lastContent = 0;
-    for (let y = h - 1; y >= margin; y--) {
-      if (cls[y] !== 3) { lastContent = y + 1; break; }
-    }
-    if (lastContent > margin && lastContent < h - margin) {
+    if (hasTrail) {
       const natY = Math.round(lastContent / scale);
+      const minDist = Math.round(img.naturalHeight * 0.02);
       if (!cuts.some(c => Math.abs(c - natY) < minDist)) cuts.push(natY);
     }
 
-    // Sort, deduplicate nearby cuts
     cuts.sort((a, b) => a - b);
+    const minDist = Math.round(img.naturalHeight * 0.02);
     return cuts.filter((v, i, arr) => i === 0 || v - arr[i-1] > minDist);
   }
 
